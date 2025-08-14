@@ -1,16 +1,22 @@
-local Event = require("ui/event")
+local Blitbuffer = require("ffi/blitbuffer")
+local InputContainer = require("ui/widget/container/inputcontainer")
+local ButtonTable = require("ui/widget/buttontable")
+local DataStorage = require("datastorage")
+local Dbg = require("dbg")
+local Device = require("device")
 local Dispatcher = require("dispatcher")
+local Event = require("ui/event")
+local FrameContainer = require("ui/widget/container/framecontainer")
+local ImageWidget = require("ui/widget/imagewidget")
 local InfoMessage = require("ui/widget/infomessage")
+local LuaSettings = require("luasettings")
+local Size = require("ui/size")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local ImageWidget = require("ui/widget/imagewidget")
-local Dbg = require("dbg")
 local logger = require("logger")
-local LuaSettings = require("luasettings")
-local DataStorage = require("datastorage")
 local util = require("util")
 local _ = require("gettext")
-
+local Screen = Device.screen
 Dbg:turnOn()
 
 local TTS = WidgetContainer:extend({
@@ -20,6 +26,7 @@ local TTS = WidgetContainer:extend({
 	current_item = nil,
 	current_highlight_idx = nil,
 	highlight_style = {},
+	is_playing = false,
 })
 
 function TTS:init()
@@ -40,6 +47,7 @@ end
 
 function TTS:onCloseDocument()
 	logger.dbg("TTS: onCloseDocument")
+	self:stop_playing()
 	self:remove_highlight()
 end
 
@@ -54,31 +62,9 @@ function TTS:addToMainMenu(menu_items)
 		sorting_hint = "main",
 		sub_item_table = {
 			{
-				text = _("Tap to start tts"),
-				keep_menu_open = true,
+				text = _("Start TTS"),
 				callback = function()
 					self:start_tts_mode()
-				end,
-			},
-			{
-				text = _("prev paragraph"),
-				keep_menu_open = true,
-				callback = function()
-					self:change_highlight(self:item_prev(self.current_item))
-				end,
-			},
-			{
-				text = _("next paragraph"),
-				keep_menu_open = true,
-				callback = function()
-					self:change_highlight(self:item_next(self.current_item))
-				end,
-			},
-			{
-				text = _("delete highlight"),
-				keep_menu_open = true,
-				callback = function()
-					self:remove_highlight()
 				end,
 			},
 		},
@@ -86,14 +72,11 @@ function TTS:addToMainMenu(menu_items)
 end
 
 function TTS:start_tts_mode()
-	UIManager:show(InfoMessage:new({ text = _("starting tts mode...") }))
-	-- local dummy_image = ImageWidget:new{
-	--     file = "resources/koreader.png",
-	-- }
-	-- -- the image will be painted on all book pages
-	-- self.view:registerViewModule('dummaaas_image', dummy_image)
 	self:create_highlight()
+	self:show_widget()
 end
+
+---------------- highlight module --------------
 
 function TTS:create_highlight()
 	local xpointer = self.ui.document:getPageXPointer(self.ui.document:getCurrentPage(true))
@@ -111,7 +94,6 @@ end
 
 function TTS:change_highlight(item)
 	self.ui.annotation.annotations[self.current_highlight_idx] = item
-	logger.dbg("modified, I hope these are diffrent. Item:\n", item, "\nAnd self.current_item:\n", self.current_item)
 	self.ui:handleEvent(
 		Event:new("AnnotationsModified", { item, self.current_item, index_modified = self.current_highlight_idx })
 	)
@@ -206,6 +188,79 @@ end
 function TTS:item_prev(item)
 	local prev_paragraph = self.ui.document:getPrevVisibleChar(item.pos0)
 	return self:item_from_xpointer(prev_paragraph)
+end
+
+------------------------- THE WIDGET -------------------------
+
+function TTS:show_widget()
+	local screen_w = Screen:getWidth()
+	local screen_h = Screen:getHeight()
+	--     file = "resources/koreader.png",
+	-- }
+	-- -- the image will be painted on all book pages
+	local widget
+	widget = FrameContainer:new({
+		radius = Size.radius.window,
+		bordersize = Size.border.window,
+		padding = 0,
+		margin = 0,
+		background = Blitbuffer.COLOR_WHITE,
+		ButtonTable:new({
+			buttons = {
+				{
+					{
+						text = "◁",
+						callback = function()
+							self:change_highlight(self:item_prev(self.current_item))
+						end,
+					},
+					{
+						text_func = function()
+							if self.is_playing then
+								return "⏸"
+							end
+							return "⏵"
+						end,
+						callback = function()
+							if self.is_playing then
+								self:stop_playing()
+							else
+								self:start_playing()
+							end
+							UIManager:close(widget)
+							self:show_widget()
+						end,
+					},
+					{
+						text = "▷",
+						callback = function()
+							self:change_highlight(self:item_next(self.current_item))
+						end,
+					},
+					{
+						text = "⏹",
+						callback = function()
+							self:stop_playing()
+							self:remove_highlight()
+							UIManager:close(widget)
+						end,
+					},
+				},
+			},
+		}),
+	})
+	local size = widget:getSize()
+	UIManager:show(widget, nil, nil, math.floor((screen_w - size.w) / 2), screen_h - size.h - 27)
+end
+
+------------------ AUDIO MODULE -------------------
+
+function TTS:stop_playing()
+	self.is_playing = false
+end
+
+function TTS:start_playing()
+	self.is_playing = true
 end
 
 return TTS
