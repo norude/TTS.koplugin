@@ -1,0 +1,8 @@
+#!/bin/sh
+cd "$(dirname "$0")" || exit 1
+wav_to_play=$1
+
+
+mpv "$1" > /dev/null 2>/dev/null
+
+echo "done"
