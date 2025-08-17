@@ -1,16 +1,14 @@
+local T = require("ffi/util").template
 local Blitbuffer = require("ffi/blitbuffer")
 local ButtonTable = require("ui/widget/buttontable")
 local DataStorage = require("datastorage")
 local Dbg = require("dbg")
 local Device = require("device")
-local Dispatcher = require("dispatcher")
 local Event = require("ui/event")
 local EventListener = require("ui/widget/eventlistener")
 local FrameContainer = require("ui/widget/container/framecontainer")
-local ImageWidget = require("ui/widget/imagewidget")
-local InfoMessage = require("ui/widget/infomessage")
-local InputContainer = require("ui/widget/container/inputcontainer")
 local LuaSettings = require("luasettings")
+local MultiInputDialog = require("ui/widget/multiinputdialog")
 local Screen = Device.screen
 local Size = require("ui/size")
 local UIManager = require("ui/uimanager")
@@ -38,10 +36,6 @@ local TTS = WidgetContainer:extend({
 	highlight_style = {},     -- means uninit
 })
 
----@type ReaderUI
-TTS.ui = nil
----@type ReaderView
-TTS.view = nil
 function TTS:init()
 	if not self.luasettings then
 		self:readSettingsFile()
@@ -54,7 +48,6 @@ function TTS:readSettingsFile()
 	self.settings = {}
 	self.settings.drawer = self.luasettings:readSetting("highlight_style.drawer", "lighten")
 	self.settings.color = self.luasettings:readSetting("color", "gray")
-	self.settings.always_follow = self.luasettings:readSetting("always_follow", true)
 	self.settings.hostname = self.luasettings:readSetting("hostname", "localhost:5000")
 	self.settings.server_extra_args = self.luasettings:readSetting("server_extra_args", {
 		length_scale = 1,
@@ -63,7 +56,22 @@ function TTS:readSettingsFile()
 end
 
 function TTS:settings_flush()
+	self.luasettings:saveSetting("highlight_style.drawer", self.settings.drawer)
+	self.luasettings:saveSetting("color", self.settings.color)
+	self.luasettings:saveSetting("hostname", self.settings.hostname)
+	self.luasettings:saveSetting("server_extra_args", self.settings.server_extra_args)
 	self.luasettings:flush()
+	if self.current_item ~= nil then
+		self:change_highlight(self.current_item)
+		for _, item in ipairs({ self.prev_item, self.current_item, self.next_item }) do
+			if item.wav ~= nil then
+				item.wav = nil
+				if item.wav_promise ~= nil then
+					item.wav_promise:cancel()
+				end
+			end
+		end
+	end
 end
 
 function TTS:onCloseDocument()
@@ -119,6 +127,9 @@ function TTS:create_highlight()
 end
 
 function TTS:change_highlight(item)
+	item.drawer = self.settings.drawer
+	item.color = self.settings.color
+
 	self.ui.annotation.annotations[self.current_highlight_idx] = item
 	self.ui:handleEvent(
 		Event:new("AnnotationsModified", { item, self.current_item, index_modified = self.current_highlight_idx })
@@ -127,7 +138,7 @@ function TTS:change_highlight(item)
 	logger.info("highlighting the ", item)
 	self.current_item = item
 	if
-		self.settings.always_follow
+		self.view.view_mode ~= "page"
 		or not self.ui.document:isXPointerInCurrentPage(self.current_item.pos0)
 		or not self.ui.document:isXPointerInCurrentPage(self.current_item.pos1)
 	then
@@ -167,21 +178,16 @@ function TTS:xpointer_end(xpointer)
 		prefix = xpointer
 	end
 	prefix = prefix .. "."
-	local text = self.ui.document:getTextFromXPointer(xpointer)
-	local text_len = text:len()
-	local max = text_len * 2
+	local max = self.ui.document:getTextFromXPointer(xpointer):len() * 2
 	local min = 0
 	while min < max do
 		local mid = math.floor((min + max) / 2)
-		logger.warn("Guessed ", mid, "max is ", max, " min is", min)
 		if
 			select("#", self.ui.document:getTextFromXPointer(prefix .. mid)) ~= 0
 			and (self.view.view_mode ~= "page" or page >= self.ui.document:getPageFromXPointer(prefix .. mid))
 		then
-			logger.warn("was correct")
 			min = mid + 1
 		else
-			logger.warn("was too high")
 			max = mid
 		end
 	end
@@ -247,9 +253,9 @@ function TTS:show_widget()
 			buttons = {
 				{
 					{
-						text = "nothing",
+						text = "⚙",
 						callback = function()
-							logger.warn("nothing")
+							self:show_settings()
 						end,
 					},
 					{
@@ -322,6 +328,85 @@ function TTS:show_widget()
 	UIManager:show(widget, nil, nil, math.floor((screen_w - size.w) / 2), screen_h - size.h - 27)
 end
 
+function TTS:show_settings()
+	local settings_dialog
+	settings_dialog = MultiInputDialog:new({
+		title = _("TTS plugin settings"),
+		fields = {
+			{
+				text = "",
+				input_type = "text",
+				hint = T(_("TTS server url. Current value: %1"), self.settings.hostname),
+			},
+			{
+				text = "",
+				input_type = "text",
+				hint = T(_("Voice model. Current value: %1"), self.settings.server_extra_args.voice or "<not set>"),
+				-- FIXME: curl localhost:5000/voices | jq ".|keys"
+			},
+			{
+				text = "",
+				input_type = "number",
+				hint = T(_("Length scale. Current value: %1"), self.settings.server_extra_args.length_scale),
+			},
+		},
+		buttons = {
+			{
+				{
+					text = _("Highlight color"),
+					callback = function()
+						settings_dialog:onCloseKeyboard()
+						self.ui.highlight:showHighlightColorDialog(function(a)
+							self.settings.color = a
+							self:settings_flush()
+						end, { color = self.settings.color })
+					end,
+				},
+
+				{
+					text = _("Highlight style"),
+					callback = function()
+						settings_dialog:onCloseKeyboard()
+						self.ui.highlight:showHighlightStyleDialog(function(a)
+							self.settings.drawer = a
+							self:settings_flush()
+						end)
+					end,
+				},
+			},
+			{
+				{
+					text = _("Cancel"),
+					callback = function()
+						settings_dialog:onClose()
+						UIManager:close(settings_dialog)
+					end,
+				},
+				{
+					text = _("Apply"),
+					callback = function()
+						local fields = settings_dialog:getFields()
+						for idx, value in ipairs(fields) do
+							if value == "" then
+								fields[idx] = nil
+							end
+						end
+						self.settings.hostname = fields[1] or self.settings.hostname
+						self.settings.server_extra_args.voice = fields[2] or self.settings.server_extra_args.voice
+						self.settings.server_extra_args.length_scale = fields[3]
+							or self.settings.server_extra_args.length_scale
+						self:settings_flush()
+						settings_dialog:onClose()
+						UIManager:close(settings_dialog)
+					end,
+				},
+			},
+		},
+	})
+
+	UIManager:show(settings_dialog)
+end
+
 ---------------- simple promises like in JS because we are doing some async and I don't know better ----------
 
 ---@class Promise:EventListener
@@ -334,7 +419,7 @@ function Promise:resolve()
 	if self.callbacks == nil then
 		return
 	end
-	for i, callback in ipairs(self.callbacks) do
+	for _, callback in ipairs(self.callbacks) do
 		callback()
 	end
 	self.callbacks = nil
@@ -415,7 +500,9 @@ function TTS:play(item)
 	return promise
 end
 
-function TTS:start_tts_server() end
+function TTS:start_tts_server()
+	io.popen("plugins/TTS.koplugin/start_tts_server")
+end
 
 function TTS:request_server(body)
 	local result = {}
@@ -432,7 +519,9 @@ function TTS:request_server(body)
 	return code, result
 end
 
-function TTS:stop_tts_server() end
+function TTS:stop_tts_server()
+	os.execute("plugins/TTS.koplugin/stop_tts_server")
+end
 
 ---@return Promise
 function TTS:ensure_wav_on_item(item, wav_name)
