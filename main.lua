@@ -27,15 +27,15 @@ Dbg:turnOn()
 local TTS = WidgetContainer:extend({
 	name = "name of tts widget",
 	fullname = _("fullname of tts widget"),
-	settings = nil, -- nil means uninit widget
-	luasettings = nil, -- nil means uninit widget
-	prev_item = nil, -- nil means current_item is the first possible
-	next_item = nil, -- nil means current_item is the last possible
-	current_item = nil, -- nil means tts is not started
+	settings = nil,           -- nil means uninit widget
+	luasettings = nil,        -- nil means uninit widget
+	prev_item = nil,          -- nil means current_item is the first possible
+	next_item = nil,          -- nil means current_item is the last possible
+	current_item = nil,       -- nil means tts is not started
 	current_highlight_idx = nil, -- nil means tts is not started
-	widget = nil, -- nil means tts is not started
-	playing_promise = nil, -- nil means not playing rn
-	highlight_style = {}, -- means uninit
+	widget = nil,             -- nil means tts is not started
+	playing_promise = nil,    -- nil means not playing rn
+	highlight_style = {},     -- means uninit
 })
 
 ---@type ReaderUI
@@ -258,7 +258,7 @@ function TTS:show_widget()
 							local was_playing = self.playing_promise ~= nil
 							self:stop_playing()
 							if self.next_item ~= nil and self.next_item.wav_promise ~= nil then
-								self.next_item.wav_promise:cancel() -- FIXME: we need to actually kill someone here
+								self.next_item.wav_promise:cancel()
 							end
 							self.next_item = self.current_item
 							self:change_highlight(self.prev_item or self.current_item)
@@ -291,7 +291,7 @@ function TTS:show_widget()
 							local was_playing = self.playing_promise ~= nil
 							self:stop_playing()
 							if self.prev_item ~= nil and self.prev_item.wav_promise ~= nil then
-								self.prev_item.wav_promise:cancel() -- FIXME: we need to actually kill someone here
+								self.prev_item.wav_promise:cancel()
 							end
 							self.prev_item = self.current_item
 							self:change_highlight(self.next_item or self.current_item)
@@ -340,20 +340,18 @@ function Promise:resolve()
 	self.callbacks = nil
 end
 
----@param callback fun()--:Promise?
-function Promise:and_then(callback)
+---@param callback fun()
+function Promise:add_callback(callback)
 	if self.callbacks == nil then
-		return callback() or self
+		callback()
+		return
 	end
 	self.callbacks[#self.callbacks + 1] = callback
-	return self
 end
 
 function Promise:cancel()
 	self.callbacks = nil
-	self.and_then = function()
-		return self
-	end
+	self.add_callback = function() end
 	self.resolve = function() end
 	if self.on_cancel ~= nil then
 		self:on_cancel()
@@ -372,7 +370,9 @@ function Promise.wait_while(condition)
 		end
 	end
 	checker()
-	return promise
+	return promise, function()
+		UIManager:unschedule(checker)
+	end
 end
 
 function Promise.instant()
@@ -385,7 +385,7 @@ end
 
 function Promise:wrap()
 	local promise = Promise.empty()
-	self:and_then(function()
+	self:add_callback(function()
 		promise:resolve()
 	end)
 	return promise
@@ -400,17 +400,16 @@ function TTS:play(item)
 	if process == nil then
 		return
 	end
-	local promise = Promise.empty()
-	promise = Promise.wait_while(function()
-		return promise.callbacks ~= nil and ffiutil.getNonBlockingReadSize(process) == 0
+	local promise, unschedule = Promise.wait_while(function()
+		return ffiutil.getNonBlockingReadSize(process) == 0
 	end)
-		:and_then(function()
-			local _ = process:read("*a")
-			process:close()
-		end)
-		:wrap()
-
+	promise:add_callback(function()
+		local _ = process:read("*a")
+		process:close()
+	end)
+	promise = promise:wrap()
 	promise.on_cancel = function()
+		unschedule()
 		os.execute("plugins/TTS.koplugin/stop_playing")
 	end
 	return promise
@@ -446,11 +445,9 @@ function TTS:ensure_wav_on_item(item, wav_name)
 
 	item.wav = wav_name
 	local download_thread = function()
-		local body = rapidjson.encode({
-			text = item.text,
-		})
-		body = self.extend(body, self.settings.server_extra_args)
-		local code, wav_table = self:request_server(body)
+		local body = util.tableDeepCopy(self.settings.server_extra_args)
+		body.text = item.text
+		local code, wav_table = self:request_server(rapidjson.encode(body))
 		if code == 200 then
 			ltn12.pump.all(
 				ltn12.source.table(wav_table),
@@ -459,23 +456,22 @@ function TTS:ensure_wav_on_item(item, wav_name)
 		end
 	end
 	local pid = ffiutil.runInSubProcess(download_thread)
-	local promise = Promise.wait_while(function()
+	local promise, unschedule = Promise.wait_while(function()
 		return not ffiutil.isSubProcessDone(pid)
 	end)
-		:and_then(function()
-			item.wav_promise = nil
-		end)
-		:wrap()
-	promise.on_cancel = function()
+	promise:add_callback(function()
+		item.wav_promise = nil
+	end)
+	item.wav_promise = promise:wrap()
+	item.wav_promise.on_cancel = function()
+		unschedule()
 		ffiutil.terminateSubProcess(pid)
 	end
-	item.wav_promise = promise
-	return promise
+	return item.wav_promise
 end
 
 function TTS:stop_playing()
 	if self.playing_promise ~= nil then
-		-- logger.warn("current promise is ", self.playing_promise, " CANCELING IT\n\n")
 		self.playing_promise:cancel()
 		self.playing_promise = nil
 	end
@@ -500,27 +496,30 @@ function TTS:start_playing()
 		return "fallback.wav"
 	end
 
-	local play_once
-	play_once = function()
-		if self.next_item == nil then
-			-- We hit the end of the book in tts mode
-			self:stop_playing()
-			UIManager:close(self.widget)
-			self:show_widget()
-			return
+	local loop_once
+	loop_once = function()
+		local wav_for_the_next
+		if self.next_item ~= nil then
+			wav_for_the_next = self:ensure_wav_on_item(self.next_item, choose_name())
 		end
-		local wav_for_the_next = self:ensure_wav_on_item(self.next_item, choose_name())
 		self.playing_promise = self:play(self.current_item)
-		self.playing_promise:and_then(function()
+		self.playing_promise:add_callback(function()
+			if wav_for_the_next == nil then
+				-- We hit the end of the book in tts mode
+				self:stop_playing()
+				UIManager:close(self.widget)
+				self:show_widget()
+				return
+			end
 			self.prev_item = self.current_item
 			self:change_highlight(self.next_item)
 			self.next_item = self:item_next(self.next_item)
-			wav_for_the_next:and_then(play_once)
+			wav_for_the_next:add_callback(loop_once)
 		end)
 	end
 	self.playing_promise = self:ensure_wav_on_item(self.current_item, choose_name())
-	self.playing_promise:and_then(function()
-		play_once()
+	self.playing_promise:add_callback(function()
+		loop_once()
 	end)
 end
 
