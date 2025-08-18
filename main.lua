@@ -25,15 +25,15 @@ Dbg:turnOn()
 local TTS = WidgetContainer:extend({
 	name = "name of tts widget",
 	fullname = _("fullname of tts widget"),
-	settings = nil,           -- nil means uninit widget
-	luasettings = nil,        -- nil means uninit widget
-	prev_item = nil,          -- nil means current_item is the first possible
-	next_item = nil,          -- nil means current_item is the last possible
-	current_item = nil,       -- nil means tts is not started
+	settings = nil, -- nil means uninit widget
+	luasettings = nil, -- nil means uninit widget
+	prev_item = nil, -- nil means current_item is the first possible
+	next_item = nil, -- nil means current_item is the last possible
+	current_item = nil, -- nil means tts is not started
 	current_highlight_idx = nil, -- nil means tts is not started
-	widget = nil,             -- nil means tts is not started
-	playing_promise = nil,    -- nil means not playing rn
-	highlight_style = {},     -- means uninit
+	widget = nil, -- nil means tts is not started
+	playing_promise = nil, -- nil means not playing rn
+	highlight_style = {}, -- means uninit
 })
 
 function TTS:init()
@@ -359,6 +359,7 @@ function TTS:show_settings()
 						self.ui.highlight:showHighlightColorDialog(function(a)
 							self.settings.color = a
 							self:settings_flush()
+							UIManager:close(UIManager:getTopmostVisibleWidget())
 						end, { color = self.settings.color })
 					end,
 				},
