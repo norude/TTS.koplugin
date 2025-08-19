@@ -7,8 +7,10 @@ local Device = require("device")
 local Event = require("ui/event")
 local EventListener = require("ui/widget/eventlistener")
 local FrameContainer = require("ui/widget/container/framecontainer")
+local InfoMessage = require("ui/widget/infomessage")
 local LuaSettings = require("luasettings")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
+local RadioButtonWidget = require("ui/widget/radiobuttonwidget")
 local Screen = Device.screen
 local Size = require("ui/size")
 local UIManager = require("ui/uimanager")
@@ -340,17 +342,44 @@ function TTS:show_settings()
 			},
 			{
 				text = "",
-				input_type = "text",
-				hint = T(_("Voice model. Current value: %1"), self.settings.server_extra_args.voice or "<not set>"),
-				-- FIXME: curl localhost:5000/voices | jq ".|keys"
-			},
-			{
-				text = "",
 				input_type = "number",
 				hint = T(_("Length scale. Current value: %1"), self.settings.server_extra_args.length_scale),
 			},
 		},
 		buttons = {
+			{
+				{
+
+					text = _("Select voice"),
+					callback = function()
+						logger.warn("running get_voices")
+						local voices = self:server_get_voices()
+						if voices == nil then
+							UIManager:show(InfoMessage:new({ text = _("Could not fetch availible voices") }))
+							return
+						end
+						local radio_buttons = {}
+						for voice, stuff in pairs(voices) do
+							table.insert(radio_buttons, {
+								{
+									text = voice,
+									checked = voice == self.settings.server_extra_args.voice,
+									provider = voice,
+								},
+							})
+						end
+						UIManager:show(RadioButtonWidget:new({
+							title_text = _("Availible voices:"),
+							width_factor = 0.5,
+							radio_buttons = radio_buttons,
+							callback = function(radio)
+								self.settings.server_extra_args.voice = radio.provider
+								self:settings_flush()
+							end,
+						}))
+					end,
+				},
+			},
 			{
 				{
 					text = _("Highlight color"),
@@ -393,8 +422,7 @@ function TTS:show_settings()
 							end
 						end
 						self.settings.hostname = fields[1] or self.settings.hostname
-						self.settings.server_extra_args.voice = fields[2] or self.settings.server_extra_args.voice
-						self.settings.server_extra_args.length_scale = fields[3]
+						self.settings.server_extra_args.length_scale = fields[2]
 							or self.settings.server_extra_args.length_scale
 						self:settings_flush()
 						settings_dialog:onClose()
@@ -507,7 +535,7 @@ end
 
 function TTS:request_server(body)
 	local result = {}
-	local _, code = http.request({
+	local a, code = http.request({
 		method = "POST",
 		url = "http://" .. self.settings.hostname,
 		source = ltn12.source.string(body),
@@ -517,7 +545,23 @@ function TTS:request_server(body)
 		},
 		sink = ltn12.sink.table(result),
 	})
-	return code, result
+	if a == 1 then
+		return code, result
+	end
+	return 500, nil
+end
+
+function TTS:server_get_voices()
+	local result = {}
+	local a, code = http.request({
+		url = "http://" .. self.settings.hostname .. "/voices",
+		source = ltn12.source.empty(),
+		sink = ltn12.sink.table(result),
+	})
+	if a ~= 1 or code ~= 200 then
+		return nil
+	end
+	return rapidjson.decode(table.concat(result))
 end
 
 function TTS:stop_tts_server()
@@ -534,7 +578,7 @@ function TTS:ensure_wav_on_item(item, wav_name)
 	end
 
 	item.wav = wav_name
-	local download_thread = function()
+	local download_thread = function(_, write_pipe)
 		local body = util.tableDeepCopy(self.settings.server_extra_args)
 		body.text = item.text
 		local code, wav_table = self:request_server(rapidjson.encode(body))
@@ -543,19 +587,30 @@ function TTS:ensure_wav_on_item(item, wav_name)
 				ltn12.source.table(wav_table),
 				ltn12.sink.file(io.open("plugins/TTS.koplugin/" .. wav_name, "w"))
 			)
+			ffiutil.writeToFD(write_pipe, "OK", true)
+		else
+			ffiutil.writeToFD(write_pipe, "ERR", true)
 		end
 	end
-	local pid = ffiutil.runInSubProcess(download_thread)
+	local pid, read_pipe = ffiutil.runInSubProcess(download_thread, true)
 	local promise, unschedule = Promise.wait_while(function()
 		return not ffiutil.isSubProcessDone(pid)
 	end)
 	promise:add_callback(function()
+		if ffiutil.readAllFromFD(read_pipe) ~= "OK" then
+			logger.err("TTS: could not generate wav file from text. Is the TTS server down?")
+			if item.wav_promise ~= nil then
+				item.wav_promise:cancel()
+			end
+		end
 		item.wav_promise = nil
 	end)
 	item.wav_promise = promise:wrap()
 	item.wav_promise.on_cancel = function()
 		unschedule()
 		ffiutil.terminateSubProcess(pid)
+		item.wav_promise = nil
+		item.wav = nil
 	end
 	return item.wav_promise
 end
