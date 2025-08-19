@@ -1,5 +1,6 @@
 local T = require("ffi/util").template
 local Blitbuffer = require("ffi/blitbuffer")
+local ButtonDialog = require("ui/widget/buttondialog")
 local ButtonTable = require("ui/widget/buttontable")
 local DataStorage = require("datastorage")
 local Dbg = require("dbg")
@@ -8,11 +9,12 @@ local Event = require("ui/event")
 local EventListener = require("ui/widget/eventlistener")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local InfoMessage = require("ui/widget/infomessage")
+local InputDialog = require("ui/widget/inputdialog")
 local LuaSettings = require("luasettings")
-local MultiInputDialog = require("ui/widget/multiinputdialog")
 local RadioButtonWidget = require("ui/widget/radiobuttonwidget")
 local Screen = Device.screen
 local Size = require("ui/size")
+local SpinWidget = require("ui/widget/spinwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local _ = require("gettext")
@@ -27,15 +29,15 @@ Dbg:turnOn()
 local TTS = WidgetContainer:extend({
 	name = "name of tts widget",
 	fullname = _("fullname of tts widget"),
-	settings = nil, -- nil means uninit widget
-	luasettings = nil, -- nil means uninit widget
-	prev_item = nil, -- nil means current_item is the first possible
-	next_item = nil, -- nil means current_item is the last possible
-	current_item = nil, -- nil means tts is not started
+	settings = nil,           -- nil means uninit widget
+	luasettings = nil,        -- nil means uninit widget
+	prev_item = nil,          -- nil means current_item is the first possible
+	next_item = nil,          -- nil means current_item is the last possible
+	current_item = nil,       -- nil means tts is not started
 	current_highlight_idx = nil, -- nil means tts is not started
-	widget = nil, -- nil means tts is not started
-	playing_promise = nil, -- nil means not playing rn
-	highlight_style = {}, -- means uninit
+	widget = nil,             -- nil means tts is not started
+	playing_promise = nil,    -- nil means not playing rn
+	highlight_style = {},     -- means uninit
 })
 
 function TTS:init()
@@ -51,6 +53,7 @@ function TTS:readSettingsFile()
 	self.settings.drawer = self.luasettings:readSetting("highlight_style.drawer", "lighten")
 	self.settings.color = self.luasettings:readSetting("color", "gray")
 	self.settings.hostname = self.luasettings:readSetting("hostname", "localhost:5000")
+	self.settings.volume = self.luasettings:readSetting("volume", "100")
 	self.settings.server_extra_args = self.luasettings:readSetting("server_extra_args", {
 		length_scale = 1,
 	})
@@ -61,6 +64,7 @@ function TTS:settings_flush()
 	self.luasettings:saveSetting("highlight_style.drawer", self.settings.drawer)
 	self.luasettings:saveSetting("color", self.settings.color)
 	self.luasettings:saveSetting("hostname", self.settings.hostname)
+	self.luasettings:saveSetting("volume", self.settings.volume)
 	self.luasettings:saveSetting("server_extra_args", self.settings.server_extra_args)
 	self.luasettings:flush()
 	if self.current_item ~= nil then
@@ -257,6 +261,11 @@ function TTS:show_widget()
 					{
 						text = "⚙",
 						callback = function()
+							if self.playing_promise ~= nil then
+								self:stop_playing()
+								UIManager:close(widget)
+								self:show_widget()
+							end
 							self:show_settings()
 						end,
 					},
@@ -332,27 +341,73 @@ end
 
 function TTS:show_settings()
 	local settings_dialog
-	settings_dialog = MultiInputDialog:new({
-		title = _("TTS plugin settings"),
-		fields = {
-			{
-				text = "",
-				input_type = "text",
-				hint = T(_("TTS server url. Current value: %1"), self.settings.hostname),
-			},
-			{
-				text = "",
-				input_type = "number",
-				hint = T(_("Length scale. Current value: %1"), self.settings.server_extra_args.length_scale),
-			},
-		},
+	settings_dialog = ButtonDialog:new({
+		title = _("TTS settings"),
 		buttons = {
 			{
 				{
-
-					text = _("Select voice"),
+					text = _("Speed"),
 					callback = function()
-						logger.warn("running get_voices")
+						UIManager:show(SpinWidget:new({
+							value = self.settings.server_extra_args.length_scale,
+							value_min = 0.01,
+							value_max = 3,
+							precision = "%.2f",
+							value_step = 0.01,
+							value_hold_step = 0.1,
+							default_value = 1,
+							title_text = _("Length scale"),
+							info_text = _("A value of 2 means that audio will take twice the time to play"),
+							callback = function(spin)
+								self.settings.server_extra_args.length_scale = spin.value
+								self:settings_flush()
+							end,
+						}))
+					end,
+				},
+
+				{
+					text = _("Volume"),
+					callback = function()
+						UIManager:show(SpinWidget:new({
+							value = self.settings.volume,
+							value_min = 0,
+							value_max = 100,
+							precision = "%02d",
+							value_step = 1,
+							value_hold_step = 10,
+							default_value = 80,
+							title_text = _("Volume"),
+							info_text = _("Select volume from 0% to a 100%"),
+							callback = function(spin)
+								self.settings.volume = math.floor(spin.value)
+								self:settings_flush()
+							end,
+						}))
+					end,
+				},
+			},
+			{
+				{
+					text = _("TTS server URL"),
+					callback = function()
+						UIManager:show(InputDialog:new({
+							title = _("Change TTS server URL"),
+
+							input_type = "text",
+							input = self.settings.hostname,
+							description = _("Don't add 'http://'"),
+							save_callback = function(new_hostname)
+								self.settings.hostname = new_hostname
+								self:settings_flush()
+							end,
+						}))
+					end,
+				},
+				{
+
+					text = _("Voice"),
+					callback = function()
 						local voices = self:server_get_voices()
 						if voices == nil then
 							UIManager:show(InfoMessage:new({ text = _("Could not fetch availible voices") }))
@@ -369,7 +424,7 @@ function TTS:show_settings()
 							})
 						end
 						UIManager:show(RadioButtonWidget:new({
-							title_text = _("Availible voices:"),
+							title_text = _("Select voice"),
 							width_factor = 0.5,
 							radio_buttons = radio_buttons,
 							callback = function(radio)
@@ -406,25 +461,8 @@ function TTS:show_settings()
 			},
 			{
 				{
-					text = _("Cancel"),
+					text = _("Close"),
 					callback = function()
-						settings_dialog:onClose()
-						UIManager:close(settings_dialog)
-					end,
-				},
-				{
-					text = _("Apply"),
-					callback = function()
-						local fields = settings_dialog:getFields()
-						for idx, value in ipairs(fields) do
-							if value == "" then
-								fields[idx] = nil
-							end
-						end
-						self.settings.hostname = fields[1] or self.settings.hostname
-						self.settings.server_extra_args.length_scale = fields[2]
-							or self.settings.server_extra_args.length_scale
-						self:settings_flush()
 						settings_dialog:onClose()
 						UIManager:close(settings_dialog)
 					end,
@@ -510,7 +548,7 @@ end
 function TTS:play(item)
 	Dbg.dassert(item.wav_promise == nil and item.wav ~= nil, "tried to play an item before creating the wav file")
 	-- logger.warn("playing item", item)
-	local process = io.popen("plugins/TTS.koplugin/play " .. item.wav, "r")
+	local process = io.popen("plugins/TTS.koplugin/play " .. item.wav .. " " .. math.floor(self.settings.volume), "r")
 	if process == nil then
 		return
 	end
@@ -523,8 +561,12 @@ function TTS:play(item)
 	end)
 	promise = promise:wrap()
 	promise.on_cancel = function()
+		local stop = io.popen("plugins/TTS.koplugin/stop_playing")
 		unschedule()
-		os.execute("plugins/TTS.koplugin/stop_playing")
+		if stop == nil then
+			return
+		end
+		stop:close()
 	end
 	return promise
 end
