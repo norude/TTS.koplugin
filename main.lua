@@ -365,7 +365,6 @@ function TTS:show_settings()
 						}))
 					end,
 				},
-
 				{
 					text = _("Volume"),
 					callback = function()
@@ -405,7 +404,6 @@ function TTS:show_settings()
 					end,
 				},
 				{
-
 					text = _("Voice"),
 					callback = function()
 						local voices = self:server_get_voices()
@@ -439,7 +437,6 @@ function TTS:show_settings()
 				{
 					text = _("Highlight color"),
 					callback = function()
-						settings_dialog:onCloseKeyboard()
 						self.ui.highlight:showHighlightColorDialog(function(a)
 							self.settings.color = a
 							self:settings_flush()
@@ -451,7 +448,6 @@ function TTS:show_settings()
 				{
 					text = _("Highlight style"),
 					callback = function()
-						settings_dialog:onCloseKeyboard()
 						self.ui.highlight:showHighlightStyleDialog(function(a)
 							self.settings.drawer = a
 							self:settings_flush()
