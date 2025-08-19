@@ -24,7 +24,6 @@ local logger = require("logger")
 local ltn12 = require("ltn12")
 local rapidjson = require("rapidjson")
 local util = require("util")
-Dbg:turnOn()
 ---@class TTS:WidgetContainer
 local TTS = WidgetContainer:extend({
 	name = "name of tts widget",
@@ -81,14 +80,14 @@ function TTS:settings_flush()
 end
 
 function TTS:onCloseDocument()
-	logger.warn("TTS: onCloseDocument")
+	logger.dbg("TTS: onCloseDocument")
 	self:stop_playing()
 	self:remove_highlight()
 	self:stop_tts_server()
 end
 
 function TTS:onCloseWidget()
-	logger.warn("TTS: onCloseWidget")
+	logger.dbg("TTS: onCloseWidget")
 	self:settings_flush()
 end
 
@@ -141,7 +140,6 @@ function TTS:change_highlight(item)
 		Event:new("AnnotationsModified", { item, self.current_item, index_modified = self.current_highlight_idx })
 	)
 	UIManager:setDirty(self.dialog, "ui")
-	logger.info("highlighting the ", item)
 	self.current_item = item
 	if
 		self.view.view_mode ~= "page"
@@ -543,7 +541,6 @@ end
 
 function TTS:play(item)
 	Dbg.dassert(item.wav_promise == nil and item.wav ~= nil, "tried to play an item before creating the wav file")
-	-- logger.warn("playing item", item)
 	local process = io.popen("plugins/TTS.koplugin/play " .. item.wav .. " " .. math.floor(self.settings.volume), "r")
 	if process == nil then
 		return
