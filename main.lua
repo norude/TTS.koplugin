@@ -1,4 +1,3 @@
-local T = require("ffi/util").template
 local Blitbuffer = require("ffi/blitbuffer")
 local ButtonDialog = require("ui/widget/buttondialog")
 local ButtonTable = require("ui/widget/buttontable")
@@ -92,8 +91,8 @@ function TTS:onCloseWidget()
 end
 
 function TTS:addToMainMenu(menu_items)
-	menu_items.tts = {
-		sorting_hint = "main",
+	menu_items.tts_plugin = {
+		sorting_hint = "typeset",
 		-- text = _("TTS stuff"),
 		-- sub_item_table = {
 		-- 	{
@@ -118,8 +117,12 @@ end
 
 function TTS:create_highlight()
 	local xpointer = self.ui.document:getPageXPointer(self.ui.document:getCurrentPage(true))
+	-- make sure that the we highlight only text
+	local s = self.ui.document:getNextVisibleChar(xpointer)
+	if s ~= nil then
+		xpointer = s
+	end
 	local item = self:item_from_xpointer(xpointer)
-
 	local index = self.ui.annotation:addItem(item)
 
 	self.current_item = item
@@ -134,7 +137,6 @@ end
 function TTS:change_highlight(item)
 	item.drawer = self.settings.drawer
 	item.color = self.settings.color
-
 	self.ui.annotation.annotations[self.current_highlight_idx] = item
 	self.ui:handleEvent(
 		Event:new("AnnotationsModified", { item, self.current_item, index_modified = self.current_highlight_idx })
@@ -183,7 +185,7 @@ function TTS:xpointer_end(xpointer)
 	end
 	prefix = prefix .. "."
 	local max = self.ui.document:getTextFromXPointer(xpointer):len() * 2
-	local min = 0
+	local min = 1
 	while min < max do
 		local mid = math.floor((min + max) / 2)
 		if
@@ -205,11 +207,14 @@ function TTS:item_from_xpointer(xpointer)
 		pos1 = self:xpointer_end(xpointer),
 	}
 	local text = self.ui.document:getTextFromXPointers(selected_text.pos0, selected_text.pos1)
+	if text ~= nil then
+		text = util.cleanupSelectedText(text)
+	end
 	local item = {
 		page = self.ui.paging and selected_text.pos0.page or selected_text.pos0,
 		pos0 = selected_text.pos0,
 		pos1 = selected_text.pos1,
-		text = util.cleanupSelectedText(text),
+		text = text,
 		drawer = self.settings.drawer,
 		color = self.settings.color,
 	}
@@ -410,7 +415,7 @@ function TTS:show_settings()
 							return
 						end
 						local radio_buttons = {}
-						for voice, stuff in pairs(voices) do
+						for voice, _ in pairs(voices) do
 							table.insert(radio_buttons, {
 								{
 									text = voice,
@@ -614,8 +619,11 @@ function TTS:ensure_wav_on_item(item, wav_name)
 
 	item.wav = wav_name
 	local download_thread = function(_, write_pipe)
-		local body = util.tableDeepCopy(self.settings.server_extra_args)
+		local body = util.tableDeepCopy(self.settings.server_extra_args or {}) or {}
 		body.text = item.text
+		if body.text == nil or body.text == "" then
+			body.text = "."
+		end
 		local code, wav_table = self:request_server(rapidjson.encode(body))
 		if code == 200 then
 			ltn12.pump.all(
