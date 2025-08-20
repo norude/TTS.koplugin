@@ -3,6 +3,7 @@ cd "$(dirname "$0")" || exit 1
 file=$1
 volume=$2
 
-mpv "$file" --volume="$volume" > /dev/null 2>/dev/null
+/mnt/us/extensions/sox/volume.sh "$(awk "BEGIN {print (exp($volume/100)-1)/(exp(1)-1)}")" >/dev/null 2>/dev/null
+/mnt/us/extensions/sox/play_single_file.sh "$file" >/dev/null 2>/dev/null
 
 echo "done"

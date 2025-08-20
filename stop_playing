@@ -1,3 +1,6 @@
 #!/bin/sh
 
-pkill mpv
+killall play
+killall play_single_file.sh
+pkill -9 gst-launch
+pkill -9 sox
