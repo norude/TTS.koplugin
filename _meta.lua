@@ -1,6 +1,6 @@
 local _ = require("gettext")
 return {
-    name = "tts",
-    fullname = _("text to speech plugin <DEV>"),
-    description = _([[This is some day gonna be a working tts plugin]]),
+    name = "TTS",
+    fullname = _("Text to speech"),
+    description = _([[Provides text to speech capabilities using piper as a backend]]),
 }
