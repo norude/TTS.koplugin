@@ -118,7 +118,6 @@ function TTS:stop_tts_mode()
 	self.prev_item = nil
 	self.widget = nil
 	UIManager:close(self.widget)
-	io.popen("plugins/TTS.koplugin/on_tts_stop")
 end
 
 ---------------- highlight module --------------
