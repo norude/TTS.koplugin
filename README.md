@@ -21,7 +21,6 @@ Adds text to speech capabilities using [piper](https://github.com/OHF-Voice/pipe
 
 ## Scripts
 the `play` is invoked with the file name to play as the first argument and the volume as the second argument.
-The filename is relative to the script's folder, so remember to `cd "$(dirname "$0")"`.
 The plugin thinks the playback is finished when the script outputs any charachter,
 so make sure to `>/dev/null 2>/dev/null` anything that can output text and add an `echo` at the end
 

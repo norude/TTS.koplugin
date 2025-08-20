@@ -616,10 +616,7 @@ function TTS:ensure_wav_on_item(item, wav_name)
 		end
 		local code, wav_table = self:request_server(rapidjson.encode(body))
 		if code == 200 then
-			ltn12.pump.all(
-				ltn12.source.table(wav_table),
-				ltn12.sink.file(io.open("plugins/TTS.koplugin/" .. wav_name, "w"))
-			)
+			ltn12.pump.all(ltn12.source.table(wav_table), ltn12.sink.file(io.open(wav_name, "w")))
 			ffiutil.writeToFD(write_pipe, "OK", true)
 		else
 			ffiutil.writeToFD(write_pipe, "ERR", true)
@@ -658,9 +655,9 @@ end
 function TTS:start_playing()
 	local choose_name = function()
 		local candidates = {
-			"one.wav",
-			"two.wav",
-			"three.wav",
+			"plugins/TTS.koplugin/one.wav",
+			"plugins/TTS.koplugin/two.wav",
+			"plugins/TTS.koplugin/three.wav",
 		}
 		for _, candidate in ipairs(candidates) do
 			if
@@ -671,7 +668,7 @@ function TTS:start_playing()
 				return candidate
 			end
 		end
-		return "fallback.wav"
+		return "plugins/TTS.koplugin/fallback.wav"
 	end
 
 	local loop_once

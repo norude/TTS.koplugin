@@ -1,5 +1,4 @@
 #!/bin/sh
-cd "$(dirname "$0")" || exit 1
 file=$1
 volume=$2
 
