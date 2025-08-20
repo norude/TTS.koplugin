@@ -80,9 +80,7 @@ end
 
 function TTS:onCloseDocument()
 	logger.dbg("TTS: onCloseDocument")
-	self:stop_playing()
-	self:remove_highlight()
-	self:stop_tts_server()
+	self:stop_tts_mode()
 end
 
 function TTS:onCloseWidget()
@@ -106,11 +104,21 @@ function TTS:addToMainMenu(menu_items)
 end
 
 function TTS:start_tts_mode()
-	self:start_tts_server()
 	self:create_highlight()
 	self.next_item = self:item_next(self.current_item)
 	self.prev_item = self:item_prev(self.current_item)
 	self:show_widget()
+	io.popen("plugins/TTS.koplugin/on_tts_start")
+end
+
+function TTS:stop_tts_mode()
+	self:stop_playing()
+	self:remove_highlight()
+	self.next_item = nil
+	self.prev_item = nil
+	self.widget = nil
+	UIManager:close(self.widget)
+	io.popen("plugins/TTS.koplugin/on_tts_stop")
 end
 
 ---------------- highlight module --------------
@@ -248,9 +256,6 @@ end
 function TTS:show_widget()
 	local screen_w = Screen:getWidth()
 	local screen_h = Screen:getHeight()
-	--     file = "resources/koreader.png",
-	-- }
-	-- -- the image will be painted on all book pages
 	local widget
 	widget = FrameContainer:new({
 		radius = Size.radius.window,
@@ -324,13 +329,7 @@ function TTS:show_widget()
 					{
 						text = "⏹",
 						callback = function()
-							self:stop_playing()
-							self:remove_highlight()
-							self:stop_tts_server()
-							UIManager:close(widget)
-							self.widget = nil
-							self.next_item = nil
-							self.prev_item = nil
+							self:stop_tts_mode()
 						end,
 					},
 				},
@@ -569,10 +568,6 @@ function TTS:play(item)
 	return promise
 end
 
-function TTS:start_tts_server()
-	io.popen("plugins/TTS.koplugin/start_tts_server")
-end
-
 function TTS:request_server(body)
 	local result = {}
 	local a, code = http.request({
@@ -602,10 +597,6 @@ function TTS:server_get_voices()
 		return nil
 	end
 	return rapidjson.decode(table.concat(result))
-end
-
-function TTS:stop_tts_server()
-	os.execute("plugins/TTS.koplugin/stop_tts_server")
 end
 
 ---@return Promise
