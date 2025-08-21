@@ -116,8 +116,8 @@ function TTS:stop_tts_mode()
 	self:remove_highlight()
 	self.next_item = nil
 	self.prev_item = nil
-	self.widget = nil
 	UIManager:close(self.widget)
+	self.widget = nil
 end
 
 ---------------- highlight module --------------
