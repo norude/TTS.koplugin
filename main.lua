@@ -111,7 +111,6 @@ function TTS:start_tts_mode()
 	self.next_item = self:item_next(self.current_item)
 	self.prev_item = self:item_prev(self.current_item)
 	self:show_widget()
-	io.popen("plugins/TTS.koplugin/on_tts_start")
 end
 
 function TTS:stop_tts_mode()
@@ -511,12 +510,13 @@ function Promise:cancel()
 	self.on_cancel = nil
 end
 
-function Promise.wait_while(condition)
+function Promise.wait_repeatedly(time_estimate)
 	local checker
 	local promise = Promise.empty()
 	checker = function()
-		if condition() then
-			UIManager:scheduleIn(0.2, checker)
+		local time = time_estimate()
+		if time ~= nil then
+			UIManager:scheduleIn(time, checker)
 		else
 			promise:resolve()
 		end
@@ -525,6 +525,16 @@ function Promise.wait_while(condition)
 	return promise, function()
 		UIManager:unschedule(checker)
 	end
+end
+
+function Promise.wait_while(condition)
+	return Promise.wait_repeatedly(function()
+		if condition() then
+			return 0.2
+		else
+			return nil
+		end
+	end)
 end
 
 function Promise.instant()
@@ -544,37 +554,15 @@ function Promise:wrap()
 end
 
 ------------------ AUDIO MODULE -------------------
-
-function TTS:play(item)
-	Dbg.dassert(item.wav_promise == nil and item.wav ~= nil, "tried to play an item before creating the wav file")
-	local process = io.popen("plugins/TTS.koplugin/play " .. item.wav .. " " .. math.floor(self.settings.volume), "r")
-	if process == nil then
-		return
+function TTS:request_server(body, endpoint)
+	if endpoint == nil then
+		endpoint = ""
 	end
-	local promise, unschedule = Promise.wait_while(function()
-		return ffiutil.getNonBlockingReadSize(process) == 0
-	end)
-	promise:add_callback(function()
-		local _ = process:read("*a")
-		process:close()
-	end)
-	promise = promise:wrap()
-	promise.on_cancel = function()
-		local stop = io.popen("plugins/TTS.koplugin/stop_playing")
-		unschedule()
-		if stop == nil then
-			return
-		end
-		stop:close()
-	end
-	return promise
-end
-
-function TTS:request_server(body)
+	body = rapidjson.encode(body)
 	local result = {}
 	local a, code = http.request({
 		method = "POST",
-		url = "http://" .. self.settings.hostname,
+		url = "http://" .. self.settings.hostname .. endpoint,
 		source = ltn12.source.string(body),
 		headers = {
 			["Content-Length"] = #body,
@@ -585,7 +573,7 @@ function TTS:request_server(body)
 	if a == 1 then
 		return code, result
 	end
-	return 500, nil
+	return 500, {}
 end
 
 function TTS:server_get_voices()
@@ -601,26 +589,57 @@ function TTS:server_get_voices()
 	return rapidjson.decode(table.concat(result))
 end
 
----@return Promise
-function TTS:ensure_wav_on_item(item, wav_name)
-	if item.wav ~= nil then
-		if item.wav_promise == nil then
-			return Promise.instant()
+function TTS:play(item)
+	local body = util.tableDeepCopy(self.settings.server_extra_args or {}) or {}
+	body.handle = item.handle
+	local code, response_table = self:request_server(body, "/play")
+	if code ~= 200 then
+		logger.err("TTS: could not play. Is the TTS server down?")
+		return Promise:instant()
+	end
+	local promise, unschedule = Promise.wait_repeatedly(function()
+		local code2, responce_table = self:request_server(body, "/remaining")
+		if code2 ~= 200 then
+			logger.err("TTS: could not get remaining time. Is the TTS server down?")
+			return 0.1
 		end
-		return item.wav_promise
+		local est = rapidjson.decode(table.concat(responce_table))
+		if not est.started then
+			return 0.2
+		end
+		if est.remaining <= 0.01 then
+			return nil
+		end
+		return math.max(0.01, est.remaining - 0.2)
+	end)
+
+	local promise2 = promise:wrap()
+	promise2.on_cancel = function()
+		unschedule()
+		local code2, _ = self:request_server(body, "/stop")
+		if code2 ~= 200 then
+			logger.err("TTS: could not stop playback. Is the TTS server down?")
+		end
+	end
+	return promise2
+end
+
+---@return Promise
+function TTS:ensure_handle_on_item(item)
+	if item.handle_promise ~= nil then
+		return item.handle_promise
 	end
 
-	item.wav = wav_name
 	local download_thread = function(_, write_pipe)
 		local body = util.tableDeepCopy(self.settings.server_extra_args or {}) or {}
 		body.text = item.text
 		if body.text == nil or body.text == "" then
 			body.text = "."
 		end
-		local code, wav_table = self:request_server(rapidjson.encode(body))
+		local code, handle_table = self:request_server(body)
 		if code == 200 then
-			ltn12.pump.all(ltn12.source.table(wav_table), ltn12.sink.file(io.open(wav_name, "w")))
-			ffiutil.writeToFD(write_pipe, "OK", true)
+			local handle = table.concat(handle_table)
+			ffiutil.writeToFD(write_pipe, handle, true)
 		else
 			ffiutil.writeToFD(write_pipe, "ERR", true)
 		end
@@ -630,22 +649,24 @@ function TTS:ensure_wav_on_item(item, wav_name)
 		return not ffiutil.isSubProcessDone(pid)
 	end)
 	promise:add_callback(function()
-		if ffiutil.readAllFromFD(read_pipe) ~= "OK" then
+		local handle = ffiutil.readAllFromFD(read_pipe)
+		if handle == "ERR" then
 			logger.err("TTS: could not generate wav file from text. Is the TTS server down?")
-			if item.wav_promise ~= nil then
-				item.wav_promise:cancel()
+			if item.handle_promise ~= nil then
+				item.handle_promise:cancel()
 			end
 		end
-		item.wav_promise = nil
+		item.handle_promise = nil
+		item.handle = handle
 	end)
-	item.wav_promise = promise:wrap()
-	item.wav_promise.on_cancel = function()
+	item.handle_promise = promise:wrap()
+	item.handle_promise.on_cancel = function()
 		unschedule()
 		ffiutil.terminateSubProcess(pid)
-		item.wav_promise = nil
-		item.wav = nil
+		item.handle_promise = nil
+		item.handle = nil
 	end
-	return item.wav_promise
+	return item.handle_promise
 end
 
 function TTS:stop_playing()
@@ -656,29 +677,11 @@ function TTS:stop_playing()
 end
 
 function TTS:start_playing()
-	local choose_name = function()
-		local candidates = {
-			"plugins/TTS.koplugin/one.wav",
-			"plugins/TTS.koplugin/two.wav",
-			"plugins/TTS.koplugin/three.wav",
-		}
-		for _, candidate in ipairs(candidates) do
-			if
-				(self.current_item == nil or self.current_item.wav ~= candidate)
-				and (self.next_item == nil or self.next_item.wav ~= candidate)
-				and (self.prev_item == nil or self.prev_item.wav ~= candidate)
-			then
-				return candidate
-			end
-		end
-		return "plugins/TTS.koplugin/fallback.wav"
-	end
-
 	local loop_once
 	loop_once = function()
 		local wav_for_the_next
 		if self.next_item ~= nil then
-			wav_for_the_next = self:ensure_wav_on_item(self.next_item, choose_name())
+			wav_for_the_next = self:ensure_handle_on_item(self.next_item)
 		end
 		self.playing_promise = self:play(self.current_item)
 		self.playing_promise:add_callback(function()
@@ -692,10 +695,11 @@ function TTS:start_playing()
 			self.prev_item = self.current_item
 			self:change_highlight(self.next_item)
 			self.next_item = self:item_next(self.next_item)
+			self.playing_promise = wav_for_the_next
 			wav_for_the_next:add_callback(loop_once)
 		end)
 	end
-	self.playing_promise = self:ensure_wav_on_item(self.current_item, choose_name())
+	self.playing_promise = self:ensure_handle_on_item(self.current_item)
 	self.playing_promise:add_callback(function()
 		loop_once()
 	end)
