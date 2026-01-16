@@ -51,9 +51,9 @@ function TTS:readSettingsFile()
 	self.settings.drawer = self.luasettings:readSetting("highlight_style.drawer", "lighten")
 	self.settings.color = self.luasettings:readSetting("color", "gray")
 	self.settings.hostname = self.luasettings:readSetting("hostname", "localhost:5000")
-	self.settings.volume = self.luasettings:readSetting("volume", "100")
 	self.settings.server_extra_args = self.luasettings:readSetting("server_extra_args", {
 		length_scale = 1,
+		volume = 1,
 	})
 	self:settings_flush()
 end
@@ -62,7 +62,6 @@ function TTS:settings_flush()
 	self.luasettings:saveSetting("highlight_style.drawer", self.settings.drawer)
 	self.luasettings:saveSetting("color", self.settings.color)
 	self.luasettings:saveSetting("hostname", self.settings.hostname)
-	self.luasettings:saveSetting("volume", self.settings.volume)
 	self.luasettings:saveSetting("server_extra_args", self.settings.server_extra_args)
 	self.luasettings:flush()
 	if self.current_item ~= nil then
@@ -372,17 +371,17 @@ function TTS:show_settings()
 					text = _("Volume"),
 					callback = function()
 						UIManager:show(SpinWidget:new({
-							value = self.settings.volume,
+							value = self.settings.server_extra_args.volume,
 							value_min = 0,
-							value_max = 100,
-							precision = "%02d",
-							value_step = 1,
-							value_hold_step = 10,
-							default_value = 80,
+							value_max = 1,
+							precision = "%.2f",
+							value_step = 0.01,
+							value_hold_step = 0.1,
+							default_value = 0.8,
 							title_text = _("Volume"),
-							info_text = _("Select volume from 0% to a 100%"),
+							info_text = _("Select volume from 0 to 1"),
 							callback = function(spin)
-								self.settings.volume = math.floor(spin.value)
+								self.settings.server_extra_args.volume = spin.value
 								self:settings_flush()
 							end,
 						}))

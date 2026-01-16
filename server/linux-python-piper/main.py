@@ -95,7 +95,6 @@ class WavItem:
         return self.playobj is not None
 
     def remaining(self):
-        print(self.remaining_frames, self.framerate)
         if self.remaining_frames is not None and self.framerate is not None:
             rem = self.remaining_frames / self.framerate
             if rem < 0:
@@ -122,6 +121,9 @@ def main() -> None:
     parser.add_argument("-s", "--speaker", type=int, help="Id of speaker (default: 0)")
     parser.add_argument(
         "--length-scale", "--length_scale", type=float, help="Phoneme length"
+    )
+    parser.add_argument(
+        "--volume", type=float, help="Volume"
     )
     parser.add_argument(
         "--noise-scale", "--noise_scale", type=float, help="Generator noise"
@@ -277,11 +279,13 @@ def main() -> None:
           "speaker_id": "<speaker id>",  (optional, overrides speaker)
           "length_scale": 1.0,           (optional)
           "noise_scale": 0.667,          (optional)
-          "length_w_scale": 0.8          (optional)
+          "length_w_scale": 0.8,         (optional)
+          "volume": 1.0,                 (optional)
         }
         """
         global global_wavs_cache
         data = json.loads(request.data)
+        print(data)
         text = data.get("text", "").strip()
         if not text:
             raise ValueError("No text provided")
@@ -350,6 +354,16 @@ def main() -> None:
                         args.noise_w_scale
                         if args.noise_w_scale is not None
                         else voice.config.noise_w_scale
+                    ),
+                )
+            ),
+            volume=float(
+                data.get(
+                    "volume",
+                    (
+                        args.volume
+                        if args.volume is not None
+                        else 1.0
                     ),
                 )
             ),
