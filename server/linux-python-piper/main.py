@@ -7,6 +7,7 @@ is originally based on https://github.com/OHF-Voice/piper1-gpl/blob/47e370fe1feb
 """
 
 import argparse
+from collections import deque
 import json
 import logging
 import wave
@@ -22,8 +23,9 @@ from piper.download_voices import VOICES_JSON, download_voice
 
 _LOGGER = logging.getLogger()
 
-global_wavs_cache: "dict[handle,WavItem]" = {}
 handle = str
+global_wavs_cache: "dict[handle,WavItem]" = {}
+handle_queue: deque[handle] = deque()
 
 
 def get_cache(handle: handle) -> "WavItem|None":
@@ -31,8 +33,11 @@ def get_cache(handle: handle) -> "WavItem|None":
 
 
 def insert_cache(handle: handle, item: "WavItem") -> handle:
-    global global_wavs_cache
+    global global_wavs_cache, handle_queue
     global_wavs_cache[handle] = item
+    handle_queue.append(handle)
+    if len(handle_queue) > 20:
+        del global_wavs_cache[handle_queue.popleft()]
     return handle
 
 
@@ -99,14 +104,15 @@ class WavItem:
             rem = self.remaining_frames / self.framerate
             if rem < 0:
                 self.remaining_frames = 0
-                return 0.
+                return 0.0
             return rem
         return float("inf")
 
     def stop(self):
         self.remaining_frames = 0
-        self.playobj.stop_stream()
-        self.playobj.close()
+        if self.started():
+            self.playobj.stop_stream()
+            self.playobj.close()
         self.playobj = None
 
 
@@ -122,9 +128,7 @@ def main() -> None:
     parser.add_argument(
         "--length-scale", "--length_scale", type=float, help="Phoneme length"
     )
-    parser.add_argument(
-        "--volume", type=float, help="Volume"
-    )
+    parser.add_argument("--volume", type=float, help="Volume")
     parser.add_argument(
         "--noise-scale", "--noise_scale", type=float, help="Generator noise"
     )
@@ -285,7 +289,6 @@ def main() -> None:
         """
         global global_wavs_cache
         data = json.loads(request.data)
-        print(data)
         text = data.get("text", "").strip()
         if not text:
             raise ValueError("No text provided")
@@ -360,11 +363,7 @@ def main() -> None:
             volume=float(
                 data.get(
                     "volume",
-                    (
-                        args.volume
-                        if args.volume is not None
-                        else 1.0
-                    ),
+                    (args.volume if args.volume is not None else 1.0),
                 )
             ),
         )
