@@ -414,7 +414,7 @@ function TTS:show_settings()
 							return
 						end
 						local radio_buttons = {}
-						for voice, _ in pairs(voices) do
+						for _, voice in pairs(voices) do
 							table.insert(radio_buttons, {
 								{
 									text = voice,
