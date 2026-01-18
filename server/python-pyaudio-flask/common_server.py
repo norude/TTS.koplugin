@@ -89,7 +89,7 @@ class WavItem:
 
 
 def create_server(
-    voices: Callable[[], AsyncGenerator[tuple[str, str]]],
+    voices: Callable[[], AsyncGenerator[tuple[str, str], None]],
     inference: Callable[[str, Any, Any, Any, BytesIO], Awaitable[None]],
 ) -> Flask:
     # pyaudio init is too noisy, so I point it to devnull
