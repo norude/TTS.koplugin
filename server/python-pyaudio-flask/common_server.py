@@ -3,13 +3,14 @@ Flask web server with HTTP API for TTS.koplugin
 is originally based on https://github.com/OHF-Voice/piper1-gpl/blob/47e370fe1feba5c34bb59dc6f73c3e0cde9a3746/src/piper/http_server.py
 """
 
+import bisect
 import json
 import logging
 import os
 import wave
 from collections import deque
 from io import BytesIO
-from typing import Any, Awaitable, Callable
+from typing import Any, AsyncGenerator, Awaitable, Callable
 
 import pyaudio
 from flask import Flask, request
@@ -88,7 +89,7 @@ class WavItem:
 
 
 def create_server(
-    voices: Callable[[], Awaitable[set[str]]],
+    voices: Callable[[], AsyncGenerator[tuple[str, str]]],
     inference: Callable[[str, Any, Any, Any, BytesIO], Awaitable[None]],
 ) -> Flask:
     # pyaudio init is too noisy, so I point it to devnull
@@ -103,8 +104,14 @@ def create_server(
     app = Flask(__name__)
 
     @app.get("/voices")
-    async def app_voices() -> list[str]:
-        return sorted(await voices())
+    async def app_voices() -> dict[str, list[str]]:
+        nice_voices: dict[str, list[str]] = {}
+        async for key, v in voices():
+            cluster = nice_voices[key] = nice_voices.get(key, [])
+            idx = bisect.bisect_left(cluster, v)
+            if idx == len(cluster) or cluster[idx] != v:
+                cluster.insert(idx, v)
+        return nice_voices
 
     @app.post("/")
     async def app_synthesize_or_get_hash_key() -> handle:

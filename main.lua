@@ -2,7 +2,6 @@ local Blitbuffer = require("ffi/blitbuffer")
 local ButtonDialog = require("ui/widget/buttondialog")
 local ButtonTable = require("ui/widget/buttontable")
 local DataStorage = require("datastorage")
-local Dbg = require("dbg")
 local Device = require("device")
 local Event = require("ui/event")
 local EventListener = require("ui/widget/eventlistener")
@@ -10,13 +9,13 @@ local FrameContainer = require("ui/widget/container/framecontainer")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local LuaSettings = require("luasettings")
-local RadioButtonWidget = require("ui/widget/radiobuttonwidget")
 local Screen = Device.screen
 local Size = require("ui/size")
 local SpinWidget = require("ui/widget/spinwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local _ = require("gettext")
+local T = require("ffi/util").template
 local ffiutil = require("ffi/util")
 local http = require("socket.http")
 local logger = require("logger")
@@ -51,10 +50,7 @@ function TTS:readSettingsFile()
 	self.settings.drawer = self.luasettings:readSetting("highlight_style.drawer", "lighten")
 	self.settings.color = self.luasettings:readSetting("color", "gray")
 	self.settings.hostname = self.luasettings:readSetting("hostname", "localhost:5000")
-	self.settings.server_extra_args = self.luasettings:readSetting("server_extra_args", {
-		length_scale = 1,
-		volume = 1,
-	})
+	self.settings.server_extra_args = self.luasettings:readSetting("server_extra_args", {})
 	self:settings_flush()
 end
 
@@ -341,6 +337,23 @@ function TTS:show_widget()
 	UIManager:show(widget, nil, nil, math.floor((screen_w - size.w) / 2), screen_h - size.h - 27)
 end
 
+local function pairsByKeys(t, f)
+	local a = {}
+	for n in pairs(t) do
+		table.insert(a, n)
+	end
+	table.sort(a, f)
+	local i = 0          -- iterator variable
+	local iter = function() -- iterator function
+		i = i + 1
+		if a[i] == nil then
+			return nil
+		else
+			return a[i], t[a[i]]
+		end
+	end
+	return iter
+end
 function TTS:show_settings()
 	local settings_dialog
 	settings_dialog = ButtonDialog:new({
@@ -413,25 +426,67 @@ function TTS:show_settings()
 							UIManager:show(InfoMessage:new({ text = _("Could not fetch availible voices") }))
 							return
 						end
-						local radio_buttons = {}
-						for _, voice in pairs(voices) do
-							table.insert(radio_buttons, {
-								{
-									text = voice,
-									checked = voice == self.settings.server_extra_args.voice,
-									provider = voice,
-								},
+						local upper_widget
+						local buttons = { {} }
+						for locale, cluster in pairsByKeys(voices) do
+							local last = buttons[#buttons]
+							if #last >= 6 then
+								last = {}
+								table.insert(buttons, last)
+							end
+							table.insert(last, {
+								text = locale,
+								callback = function()
+									local voice_buttons = {}
+									for _, voice in ipairs(cluster) do
+										table.insert(voice_buttons, {
+											{
+												text = voice,
+												checked = voice == self.settings.server_extra_args.voice,
+												callback = function()
+													self.settings.server_extra_args.voice = voice
+													self:settings_flush()
+													UIManager:close(UIManager:getTopmostVisibleWidget())
+												end,
+											},
+										})
+									end
+									table.insert(voice_buttons, {
+										{
+											text = _("Close"),
+											callback = function()
+												UIManager:close(UIManager:getTopmostVisibleWidget())
+												UIManager:show(upper_widget())
+											end,
+										},
+									})
+									UIManager:close(UIManager:getTopmostVisibleWidget())
+									UIManager:show(ButtonDialog:new({
+										text = _("Select voice"),
+										shrink_unneeded_width = true,
+										buttons = voice_buttons,
+									}))
+								end,
 							})
 						end
-						UIManager:show(RadioButtonWidget:new({
-							title_text = _("Select voice"),
-							width_factor = 0.5,
-							radio_buttons = radio_buttons,
-							callback = function(radio)
-								self.settings.server_extra_args.voice = radio.provider
-								self:settings_flush()
-							end,
-						}))
+						table.insert(buttons, {
+							{
+								text = _("Close"),
+								callback = function()
+									UIManager:close(UIManager:getTopmostVisibleWidget())
+								end,
+							},
+						})
+						upper_widget = function()
+							return ButtonDialog:new({
+								title = self.settings.server_extra_args.voice
+									and T(_('Current voice is "%1"'), self.settings.server_extra_args.voice)
+									or _("Select voice"),
+								buttons = buttons,
+								shrink_unneeded_width = true,
+							})
+						end
+						UIManager:show(upper_widget())
 					end,
 				},
 			},
@@ -591,7 +646,7 @@ end
 function TTS:play(item)
 	local body = util.tableDeepCopy(self.settings.server_extra_args or {}) or {}
 	body.handle = item.handle
-	local code, response_table = self:request_server(body, "/play")
+	local code, _ = self:request_server(body, "/play")
 	if code ~= 200 then
 		logger.err("TTS: could not play. Is the TTS server down?")
 		return Promise:instant()

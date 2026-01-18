@@ -93,7 +93,7 @@ def main() -> None:
     default_voice = PiperVoice.load(model_path, use_cuda=args.cuda)
     loaded_voices: dict[str, PiperVoice] = {default_model_id: default_voice}
 
-    async def voices() -> set[str]:
+    async def voices():
         config_paths: list[Path] = [Path(f"{model_path}.json")]
 
         for data_dir in args.data_dir:
@@ -101,8 +101,9 @@ def main() -> None:
                 config_path = Path(f"{onnx_path}.json")
                 if config_path.exists():
                     config_paths.append(config_path)
-
-        return {config_path.name.rstrip(".onnx.json") for config_path in config_paths}
+        for config_path in config_paths:
+            name = config_path.name.rstrip(".onnx.json")
+            yield name.split("-")[0], name
 
     async def inference(text: str, model_id, length_scale, volume, wav_io: BytesIO):
         voice = loaded_voices.get(model_id)

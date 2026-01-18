@@ -26,9 +26,9 @@ def main() -> None:
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
     _LOGGER.debug(args)
 
-    async def voices() -> set[str]:
-        voices = await edge_tts.list_voices()
-        return {voice["ShortName"] for voice in voices}
+    async def voices():
+        for voice in await edge_tts.list_voices():
+            yield voice["Locale"].replace("-", "_", 1).split("-")[0], voice["ShortName"]
 
     async def inference(text: str, voice, length_scale, volume, wav_io: BytesIO):
         voice = str(voice if voice is not None else DEFAULT_VOICE)
