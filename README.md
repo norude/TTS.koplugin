@@ -1,6 +1,7 @@
 # TTS plugin for koreader
 
-Adds text to speech capabilities using another device for both inference and playback. Uses [piper](https://github.com/OHF-Voice/piper1-gpl/) as a backend on linux
+Adds text to speech capabilities using a separate server for both inference and playback.
+Uses [piper](https://github.com/OHF-Voice/piper1-gpl/) or [edge-tts](https://github.com/rany2/edge-tts) as a backend
 
 ## Installation
 
