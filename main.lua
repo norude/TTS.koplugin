@@ -661,7 +661,7 @@ function TTS:play(item)
 		if not est.started then
 			return 0.2
 		end
-		if est.remaining <= 0.01 then
+		if est.remaining == 0 then
 			return nil
 		end
 		return math.max(0.01, est.remaining - 0.2)
@@ -688,7 +688,7 @@ function TTS:ensure_handle_on_item(item)
 		local body = util.tableDeepCopy(self.settings.server_extra_args or {}) or {}
 		body.text = item.text
 		if body.text == nil or body.text == "" then
-			body.text = "."
+			body.text = "a"
 		end
 		local code, handle_table = self:request_server(body)
 		if code == 200 then

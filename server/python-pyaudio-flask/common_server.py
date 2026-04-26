@@ -7,15 +7,34 @@ import bisect
 import json
 import logging
 import os
+import sys
 import wave
 from collections import deque
 from io import BytesIO
-from typing import Any, AsyncGenerator, Awaitable, Callable
+from typing import Any, Callable
+from collections.abc import Awaitable, AsyncGenerator
 
 import pyaudio
 from flask import Flask, request
 
 _LOGGER = logging.getLogger()
+
+_null_fno = os.open(os.devnull, os.O_RDWR)
+_stderr_fno = sys.stderr.fileno()
+_duplicated_stderr_fno = os.dup(_stderr_fno)
+
+
+def get_pyaudio():
+    # not getting a new pyaudio every playback causes issues on Termux
+    # this is not a fix, re-initializing pyaudio constantly just sidesteps the bug
+    # a real fix would probably need to be implemented in portaudio directly
+
+    # pyaudio init is too noisy so redirect stderr to null during init
+    os.dup2(_null_fno, _stderr_fno)
+    audio = pyaudio.PyAudio()
+    os.dup2(_duplicated_stderr_fno, _stderr_fno)  # and then restore it
+    return audio
+
 
 handle = str
 global_wavs_cache: "dict[handle,WavItem]" = {}
@@ -40,17 +59,17 @@ def generate_wavs_cache_key(*args) -> handle:
 
 
 class WavItem:
-    buffer: BytesIO
-    remaining_frames: None | int
-    framerate: None | int
+    remaining_frames: None | int = None  # None means not started, 0 means finished
+    framerate: None | int = None
     playobj = None
+    pyaudio = None
 
     def __init__(self, wav: BytesIO):
         self.buffer = wav
 
-    def play(self, p: pyaudio.PyAudio):
-        if self.started():
-            self.stop()
+    def play(self):
+        self.stop()
+        self.pyaudio = get_pyaudio()
         self.buffer.seek(0)
         wav = wave.open(self.buffer)
         self.remaining_frames = wav.getnframes()
@@ -60,8 +79,8 @@ class WavItem:
             self.remaining_frames -= frame_count
             return (wav.readframes(frame_count), pyaudio.paContinue)
 
-        self.playobj = p.open(
-            format=p.get_format_from_width(wav.getsampwidth()),
+        self.playobj = self.pyaudio.open(
+            format=self.pyaudio.get_format_from_width(wav.getsampwidth()),
             channels=wav.getnchannels(),
             rate=wav.getframerate(),
             output=True,
@@ -69,36 +88,35 @@ class WavItem:
         )
 
     def started(self):
-        return self.playobj is not None
+        return self.remaining_frames is not None
 
     def remaining(self):
-        if self.remaining_frames is not None and self.framerate is not None:
-            rem = self.remaining_frames / self.framerate
-            if rem < 0:
-                self.remaining_frames = 0
-                return 0.0
+        if self.remaining_frames is None or self.framerate is None:
+            return float("inf")
+        rem = self.remaining_frames / self.framerate
+        if rem > 0:
             return rem
-        return float("inf")
+        self.stop()
+        return 0.0
 
     def stop(self):
         self.remaining_frames = 0
-        if self.started():
+        if self.playobj is not None:
             self.playobj.stop_stream()
             self.playobj.close()
+        if self.pyaudio is not None:
+            self.pyaudio.terminate()
         self.playobj = None
+        self.pyaudio = None
+
+    def __del__(self):
+        self.stop()
 
 
 def create_server(
     voices: Callable[[], AsyncGenerator[tuple[str, str], None]],
     inference: Callable[[str, Any, Any, Any, BytesIO], Awaitable[None]],
 ) -> Flask:
-    # pyaudio init is too noisy, so I point it to devnull
-    stderr = os.dup(2)
-    null = os.open(os.devnull, os.O_RDWR)
-    os.dup2(null, 2)
-    audio = pyaudio.PyAudio()
-    os.dup2(stderr, 2)
-    os.close(null)
 
     # Create web server
     app = Flask(__name__)
@@ -155,7 +173,7 @@ def create_server(
         cache = get_cache(json.loads(request.data).get("handle"))
         if cache is None:
             raise ValueError("handle is invalid")
-        cache.play(audio)
+        cache.play()
         return ""
 
     @app.post("/remaining")
