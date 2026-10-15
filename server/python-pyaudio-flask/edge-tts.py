@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.13
+#!/usr/bin/env python3.14
 import argparse
 import logging
 from io import BytesIO
