@@ -4,7 +4,7 @@
     with ps; [
       edge-tts
       flask
-      flask.optional-dependencies.async
+      asgiref
       pyaudio
       pydub
       onnxruntime
